@@ -4,15 +4,18 @@ import json
 import ollama
 from neuroform.memory.graph import KnowledgeGraph, GraphLayer
 from neuroform.memory.working_memory import WorkingMemory
+from neuroform.memory.amygdala import Amygdala
 
 logger = logging.getLogger(__name__)
 
 class OllamaClient:
     def __init__(self, kg: KnowledgeGraph, model: str = "llama3",
-                 working_memory: Optional[WorkingMemory] = None):
+                 working_memory: Optional[WorkingMemory] = None,
+                 amygdala: Optional[Amygdala] = None):
         self.kg = kg
         self.model = model
         self.working_memory = working_memory or WorkingMemory(capacity=7)
+        self.amygdala = amygdala or Amygdala()
 
     def chat_with_memory(self, user_id: str, message: str) -> str:
         """
@@ -44,10 +47,12 @@ Format:
 ```json
 {{
     "new_memories": [
-        {{"source": "User", "relation": "LIKES", "target": "Apples", "layer": "SOCIAL"}}
+        {{"source": "User", "relation": "LIKES", "target": "Apples", "layer": "SOCIAL",
+         "valence": 0.5, "intensity": 0.3, "emotion": "joy"}}
     ]
 }}
 ```
+{self.amygdala.VALENCE_EXTRACTION_PROMPT}
 Only do this if a clear, long-term fact is declared. Otherwise omit the JSON block.
 """
 
@@ -63,7 +68,7 @@ Only do this if a clear, long-term fact is declared. Otherwise omit the JSON blo
             # 6. Record the assistant response in working memory
             self.working_memory.add_conversation_turn("assistant", reply_text)
 
-            # 7. Extract and save memories
+            # 7. Extract and save memories (with amygdala emotional tagging)
             self._extract_and_save_memories(reply_text)
             
             # Clean up JSON block from user visibility (optional but good UX)
@@ -97,6 +102,9 @@ Only do this if a clear, long-term fact is declared. Otherwise omit the JSON blo
                     self.kg.add_node("Entity", target, layer=layer)
                     self.kg.add_relationship(source, rel, target, strength=1.0)
                     logger.info(f"Learned memory: {source} -> {rel} -> {target}")
+
+            # Apply emotional valence tags via the Amygdala
+            self.amygdala.tag_memories(self.kg.driver, memories)
                     
         except json.JSONDecodeError:
             logger.warning("Failed to parse JSON memory block from LLM output.")

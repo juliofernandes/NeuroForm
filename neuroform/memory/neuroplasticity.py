@@ -1,17 +1,20 @@
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import json
 import ollama
 from neuroform.memory.graph import KnowledgeGraph
+from neuroform.memory.amygdala import Amygdala
 
 logger = logging.getLogger(__name__)
 
 class AutonomousNeuroplasticity:
     """Uses LLM reasoning to determine memory strengthening, decay, or pruning."""
 
-    def __init__(self, kg: KnowledgeGraph, model: str = "llama3"):
+    def __init__(self, kg: KnowledgeGraph, model: str = "llama3",
+                 amygdala: Optional[Amygdala] = None):
         self.kg = kg
         self.model = model
+        self.amygdala = amygdala or Amygdala()
 
     def evaluate_and_optimize(self) -> Dict[str, Any]:
         """
@@ -79,10 +82,14 @@ class AutonomousNeuroplasticity:
             return 0
             
         actions = 0
-        decay_query = """
+        # Build the emotional immunity clause from the Amygdala
+        immunity_clause = self.amygdala.get_decay_immunity_cypher()
+        decay_query = f"""
         MATCH ()-[s]->()
         // Do not decay the core topology
         WHERE type(s) <> 'IN_LAYER' AND type(s) <> 'PEER_LAYER'
+        // Amygdala: protect emotionally significant edges
+        {immunity_clause}
         // Base heuristic: simply subtract the decay rate
         SET s.strength = s.strength - $decay_rate
         WITH s
