@@ -1,35 +1,38 @@
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import json
 import ollama
 from neuroform.memory.graph import KnowledgeGraph, GraphLayer
+from neuroform.memory.working_memory import WorkingMemory
 
 logger = logging.getLogger(__name__)
 
 class OllamaClient:
-    def __init__(self, kg: KnowledgeGraph, model: str = "llama3"):
+    def __init__(self, kg: KnowledgeGraph, model: str = "llama3",
+                 working_memory: Optional[WorkingMemory] = None):
         self.kg = kg
         self.model = model
+        self.working_memory = working_memory or WorkingMemory(capacity=7)
 
     def chat_with_memory(self, user_id: str, message: str) -> str:
         """
         Processes a user message, fetching context from Neo4j,
         querying Ollama, and saving extracted facts back to Neo4j.
+        Uses WorkingMemory as the prefrontal cortex attention buffer.
         """
-        # 1. Fetch memory context
-        try:
-            # We fetch context based on the user's name or keywords.
-            # Simplified for standalone: just fetch NARRATIVE layer related to "User".
-            context_data = self.kg.query_context("User", layer=GraphLayer.NARRATIVE)
-            
-            # Format context
-            context_str = "No prior memory context."
-            if context_data:
-                context_str = "Prior Memory:\\n"
-                for item in context_data:
-                    context_str += f"- {item['source']} ({item['relationship']}) {item['target']}\\n"
+        # 1. Record the user message in working memory
+        self.working_memory.add_conversation_turn("user", message)
 
-            # 2. Construct Prompt for Ollama
+        # 2. Fetch memory context from graph and inject into working memory
+        try:
+            context_data = self.kg.query_context("User", layer=GraphLayer.NARRATIVE)
+            if context_data:
+                self.working_memory.add_graph_context(context_data)
+
+            # 3. Build context from working memory's attention-gated buffer
+            context_str = self.working_memory.build_context_string()
+
+            # 4. Construct Prompt for Ollama
             system_prompt = f"""You are NeuroForm, an autonomous AI with a multi-layered Neo4j memory system.
 Your goal is to answer the user gracefully.
 
@@ -48,14 +51,19 @@ Format:
 Only do this if a clear, long-term fact is declared. Otherwise omit the JSON block.
 """
 
-            response = ollama.chat(model=self.model, messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message}
-            ])
+            # 5. Build messages with conversation history from working memory
+            messages = [{"role": "system", "content": system_prompt}]
+            for turn in self.working_memory.get_conversation_history()[-6:]:
+                messages.append(turn)
+
+            response = ollama.chat(model=self.model, messages=messages)
             
             reply_text = response['message']['content']
 
-            # 3. Extract and save memories
+            # 6. Record the assistant response in working memory
+            self.working_memory.add_conversation_turn("assistant", reply_text)
+
+            # 7. Extract and save memories
             self._extract_and_save_memories(reply_text)
             
             # Clean up JSON block from user visibility (optional but good UX)
@@ -94,3 +102,4 @@ Only do this if a clear, long-term fact is declared. Otherwise omit the JSON blo
             logger.warning("Failed to parse JSON memory block from LLM output.")
         except Exception as e:
             logger.error(f"Error saving memories: {e}")
+

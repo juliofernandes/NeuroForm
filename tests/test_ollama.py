@@ -24,12 +24,14 @@ def test_chat_with_memory_no_context_no_json(mock_chat, mock_kg):
     mock_chat.assert_called_once()
     args, kwargs = mock_chat.call_args
     assert kwargs["model"] == "test_model"
-    assert "No prior memory context." in kwargs["messages"][0]["content"]
+    # The system prompt should contain the user's message from working memory
+    # (WorkingMemory always has at least the user's conversation turn)
+    assert "Prior Memory:" in kwargs["messages"][0]["content"]
 
 @patch("neuroform.llm.ollama_client.ollama.chat")
 def test_chat_with_memory_with_context(mock_chat, mock_kg):
     mock_kg.query_context.return_value = [
-        {"source": "User", "relationship": "LIKES", "target": "Pizza"}
+        {"source": "User", "relationship": "LIKES", "target": "Pizza", "strength": 1.0}
     ]
     mock_chat.return_value = {"message": {"content": "I remember you like Pizza!"}}
     
@@ -38,6 +40,7 @@ def test_chat_with_memory_with_context(mock_chat, mock_kg):
     
     assert reply == "I remember you like Pizza!"
     args, kwargs = mock_chat.call_args
+    # WorkingMemory formats graph context as "[GRAPH] source (relation) target"
     assert "User (LIKES) Pizza" in kwargs["messages"][0]["content"]
 
 @patch("neuroform.llm.ollama_client.ollama.chat")
@@ -101,3 +104,48 @@ def test_extract_and_save_memories_exception(mock_kg):
     # Needs to not raise uncaught exception
     client._extract_and_save_memories(ai_reply)
     mock_kg.add_node.assert_called_once()
+
+@patch("neuroform.llm.ollama_client.ollama.chat")
+def test_chat_records_conversation_turns(mock_chat, mock_kg):
+    """Verify that chat adds both user and assistant turns to working memory."""
+    mock_kg.query_context.return_value = []
+    mock_chat.return_value = {"message": {"content": "Hi there!"}}
+    
+    client = OllamaClient(mock_kg)
+    client.chat_with_memory("user123", "Hello")
+    
+    history = client.working_memory.get_conversation_history()
+    assert len(history) == 2
+    assert history[0] == {"role": "user", "content": "Hello"}
+    assert history[1] == {"role": "assistant", "content": "Hi there!"}
+
+@patch("neuroform.llm.ollama_client.ollama.chat")
+def test_chat_multi_turn_history_in_prompt(mock_chat, mock_kg):
+    """Verify that multi-turn conversation history is sent to the LLM."""
+    mock_kg.query_context.return_value = []
+    mock_chat.return_value = {"message": {"content": "Response 1"}}
+    
+    client = OllamaClient(mock_kg)
+    client.chat_with_memory("user123", "Turn 1")
+    
+    mock_chat.return_value = {"message": {"content": "Response 2"}}
+    client.chat_with_memory("user123", "Turn 2")
+    
+    # The second call should include history from turn 1
+    args, kwargs = mock_chat.call_args
+    messages = kwargs["messages"]
+    # Should be: system, user("Turn 1"), assistant("Response 1"), user("Turn 2")
+    assert len(messages) >= 3
+
+@patch("neuroform.llm.ollama_client.ollama.chat")
+def test_custom_working_memory_injected(mock_chat, mock_kg):
+    """Verify that a custom WorkingMemory instance is used when provided."""
+    from neuroform.memory.working_memory import WorkingMemory
+    custom_wm = WorkingMemory(capacity=3)
+    
+    mock_kg.query_context.return_value = []
+    mock_chat.return_value = {"message": {"content": "ok"}}
+    
+    client = OllamaClient(mock_kg, working_memory=custom_wm)
+    assert client.working_memory is custom_wm
+    assert client.working_memory.capacity == 3
