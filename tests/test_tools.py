@@ -16,7 +16,8 @@ def clean_registry():
     tool_registry.register(
         func=dummy_math,
         description="Adds two numbers.",
-        parameters={"x": {"type": "integer"}, "y": {"type": "integer"}}
+        parameters={"x": {"type": "integer"}, "y": {"type": "integer"}},
+        requires_owner=False
     )
     yield
 

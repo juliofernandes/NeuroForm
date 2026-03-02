@@ -18,6 +18,7 @@ Instead of relying *solely* on hardcoded mathematical heuristics, NeuroForm util
 1. **`KnowledgeGraph` (`graph.py`)**: The low-level Neo4j driver wrapper. Handles connection pooling, ErnOS-layer 6-tier mesh topology routing, and Cypher query execution for CRUD operations. It tracks `last_fired` timestamps to simulate biological action potentials.
 2. **`OllamaClient` (`ollama_client.py`)**: The interaction layer. Fetches relevant memory context from the graph, injects it into the LLM prompt, and then extracts new memories from the LLM's response to store back into Neo4j.
 3. **`AutonomousNeuroplasticity` (`neuroplasticity.py`)**: The background daemon loop. Combines baseline temporal mathematical decay with high-level LLM intellectual review. The LLM decides what memories are obsolete, contradictory, or vital.
+4. **`AgencyDaemon` & `ToolManager` (`daemons/`, `tools/`)**: A continuous, interruptible background process and tool execution engine. Allows Nero to execute multi-turn autonomous loops using native OS tools (shell execution, AppleScript, filesystem ops) constrained by a two-tier permission system (OWNER vs. SAFE).
 
 ## Installation
 

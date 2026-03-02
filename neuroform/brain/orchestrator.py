@@ -207,7 +207,11 @@ class BrainOrchestrator:
 
     def _execute_inference_with_tools(self, user_id: str, message: str, scope: str, tiered_ctx: str) -> str:
         """Handles multi-turn inference for native Python tool execution via Ollama."""
-        tool_instructions = tool_registry.get_prompt_instructions()
+        import os
+        owner_id = os.environ.get("DISCORD_OWNER_ID")
+        is_owner = bool(owner_id and user_id == owner_id)
+        
+        tool_instructions = tool_registry.get_prompt_instructions(is_owner)
         
         MAX_TOOL_LOOPS = 5
         conversation = [
@@ -244,7 +248,7 @@ class BrainOrchestrator:
                         args = tool_call.get("arguments", {})
                         
                         logger.info(f"Nero autonomous execution: {func_name}({args})")
-                        result = tool_registry.execute(func_name, args)
+                        result = tool_registry.execute(func_name, args, is_owner=is_owner)
                         
                         # Provide the result back as a user observation
                         conversation.append({

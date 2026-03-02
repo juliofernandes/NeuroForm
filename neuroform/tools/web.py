@@ -64,7 +64,8 @@ tool_registry.register(
     description="Search the live web using DuckDuckGo. Best for answering questions about current events, code, or general knowledge.",
     parameters={
         "query": {"type": "string", "description": "The web search query"}
-    }
+    },
+    requires_owner=False
 )
 
 tool_registry.register(
@@ -72,5 +73,6 @@ tool_registry.register(
     description="Fetch the readable text content of a specific URL.",
     parameters={
         "url": {"type": "string", "description": "The full HTTP/HTTPS URL to read"}
-    }
+    },
+    requires_owner=False
 )
