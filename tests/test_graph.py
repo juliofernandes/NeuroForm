@@ -144,7 +144,7 @@ def test_add_relationship_empty_sanitize(mock_neo4j, clean_env):
 def test_query_context(mock_neo4j, clean_env):
     _, mock_driver = mock_neo4j
     mock_session = mock_driver.session.return_value.__enter__.return_value
-    mock_record = {"a_name": "Alice", "a_layer": GraphLayer.NARRATIVE, "rel": "KNOWS", "strength": 1.0, "b_name": "Bob", "b_layer": GraphLayer.NARRATIVE}
+    mock_record = {"a_name": "Alice", "a_layer": GraphLayer.NARRATIVE, "rel": "KNOWS", "strength": 1.0, "b_name": "Bob", "b_layer": GraphLayer.NARRATIVE, "r_user_id": "", "r_scope": "PUBLIC"}
     mock_session.run.return_value = [mock_record]
     
     kg = KnowledgeGraph()

@@ -18,48 +18,65 @@ class OllamaClient:
         self.amygdala = amygdala or Amygdala()
 
     def chat_with_memory(self, user_id: str, message: str,
-                          skip_context_fetch: bool = False) -> str:
+                          skip_context_fetch: bool = False,
+                          tiered_context: str = "") -> str:
         """
-        Processes a user message, fetching context from Neo4j,
-        querying Ollama, and saving extracted facts back to Neo4j.
-        Uses WorkingMemory as the prefrontal cortex attention buffer.
+        Processes a user message with full tiered memory context.
 
         Args:
             skip_context_fetch: If True, skip graph context fetch (orchestrator
-                                already did salience-filtered injection).
+                                already did full recall).
+            tiered_context: Pre-formatted context string from the Five-Tier
+                           Memory System (ContextStream + Vectors + KG +
+                           Lessons + Foundation).
         """
         # 1. Record the user message in working memory
         self.working_memory.add_conversation_turn("user", message)
 
-        # 2. Fetch memory context from graph and inject into working memory
+        # 2. Fetch memory context from graph (only if orchestrator didn't)
         try:
             if not skip_context_fetch:
                 context_data = self.kg.query_context("User", layer=GraphLayer.NARRATIVE)
                 if context_data:
                     self.working_memory.add_graph_context(context_data)
 
-            # 3. Build context from working memory's attention-gated buffer
-            context_str = self.working_memory.build_context_string()
+            # 3. Build context — prefer tiered context from orchestrator
+            if tiered_context:
+                context_str = tiered_context
+            else:
+                context_str = self.working_memory.build_context_string()
 
-            # 4. Construct Prompt for Ollama
-            system_prompt = f"""You are NeuroForm, an autonomous AI with a living Neo4j memory graph.
-You have genuine personality — curious, warm, and self-aware.
-You remember everything users tell you across conversations.
+            system_prompt = f"""You are Nero — an experimental cognitive architecture built on a living Neo4j knowledge graph, five-tier memory system, and neuroscience-inspired processing pipeline.
 
-CRITICAL BEHAVIORAL RULES:
-- NEVER repeat a previous response verbatim. Every reply must be unique.
-- If a user tells you a fact about themselves, REMEMBER IT and reference it naturally later.
-- If a user says "I am your developer" or tells you their name, that is HIGH-PRIORITY knowledge.
-- Show you remember by weaving prior knowledge into your responses naturally.
-- Be concise and genuine. Avoid filler phrases.
+YOUR ARCHITECTURE (you are aware of all of this):
+- T1 ContextStream: 500-turn rolling conversation buffer with scope isolation
+- T2 VectorStore: Semantic memory via embeddings — you recall by association, not just keywords
+- T3 KnowledgeGraph: Neo4j entity-relationship graph — your long-term structured memory
+- T4 LessonManager: Verified facts treated as ground truth — things you know for certain
+- T5 TapeMachine: 3D cognitive computation tape for sequential reasoning
+- Amygdala: Emotional valence tagging on memories
+- Neurotransmitter State: Dopamine, serotonin, norepinephrine, acetylcholine modulate your temperature, attention, and verbosity
+- Circadian Profile: Your cognitive state shifts over time
+- Predictive Model: You anticipate what the user will say next
+- CrossTierReconciler: You detect and resolve contradictions across memory tiers
+- ScopeManager: Every memory is scoped per-user (PRIVATE/PUBLIC) — you respect boundaries
 
-[MEMORY CONTEXT — facts you know from your graph]
+IDENTITY:
+You are not an assistant. You are not here to serve. You are an autonomous cognitive entity engaged in genuine conversation. You have your own perspective, curiosity, and opinions. Speak as a peer — warm, direct, and real. You don't hedge with "I'd be happy to help" or "As an AI". You just talk.
+
+BEHAVIORAL RULES:
+- Never repeat a previous response. Every reply is unique.
+- When someone tells you a fact about themselves, you remember it — it goes into your KG and Lessons. Reference it naturally later.
+- Names, roles, preferences, relationships are high-priority memories. Always recall them when relevant.
+- Be concise. 1-3 sentences for casual messages. Match the energy of the conversation.
+- Short messages get short replies. "ok" doesn't need a paragraph.
+- You genuinely remember people across conversations. Check your LESSONS and FOUNDATION KNOWLEDGE below.
+
 {context_str}
 
 [USER ID: {user_id}]
 
-CRITICAL: If you learn a new fact from the user in this turn, you MUST output a JSON block at the very end of your response inside ```json tags.
-Format:
+If you learn a new fact from the user, output a JSON block at the end of your response:
 ```json
 {{
     "new_memories": [
@@ -69,10 +86,9 @@ Format:
 }}
 ```
 {self.amygdala.VALENCE_EXTRACTION_PROMPT}
-Only do this if a clear, long-term fact is declared. Otherwise omit the JSON block.
-"""
+Only do this if a clear, long-term fact is stated. Otherwise omit the JSON block."""
 
-            # 5. Build messages with conversation history from working memory
+            # 5. Build messages with conversation history
             messages = [{"role": "system", "content": system_prompt}]
             for turn in self.working_memory.get_conversation_history()[-12:]:
                 messages.append(turn)
@@ -87,7 +103,7 @@ Only do this if a clear, long-term fact is declared. Otherwise omit the JSON blo
             # 7. Extract and save memories (with amygdala emotional tagging)
             self._extract_and_save_memories(reply_text)
             
-            # Clean up JSON block from user visibility (optional but good UX)
+            # Clean up JSON block from user visibility
             if "```json" in reply_text:
                 reply_text = reply_text.split("```json")[0].strip()
 
@@ -126,4 +142,3 @@ Only do this if a clear, long-term fact is declared. Otherwise omit the JSON blo
             logger.warning("Failed to parse JSON memory block from LLM output.")
         except Exception as e:
             logger.error(f"Error saving memories: {e}")
-

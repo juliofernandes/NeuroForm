@@ -19,6 +19,8 @@ import logging
 from neuroform.memory.graph import KnowledgeGraph, GraphLayer
 from neuroform.memory.working_memory import WorkingMemory
 from neuroform.memory.amygdala import Amygdala
+from neuroform.memory.context_stream import ContextStream
+from neuroform.memory.lessons import LessonManager
 from neuroform.llm.ollama_client import OllamaClient
 from neuroform.brain.orchestrator import BrainOrchestrator
 
@@ -43,17 +45,19 @@ def kg():
 
 
 @pytest.fixture
-def brain(kg):
-    """Live BrainOrchestrator with all 9 systems."""
+def brain(kg, tmp_path):
+    """Live BrainOrchestrator with Five-Tier Memory System."""
     import os
     model = os.environ.get("OLLAMA_MODEL", "gemma3:4b")
-    orch = BrainOrchestrator(kg, model=model)
+    cs = ContextStream(max_turns=500, persist_path=str(tmp_path / "wm.jsonl"))
+    lm = LessonManager(persist_path=str(tmp_path / "lessons.json"))
+    orch = BrainOrchestrator(kg, model=model, context_stream=cs, lesson_manager=lm)
     return orch
 
 
-def talk(brain, message, user_id="BehavTestUser"):
+def talk(brain, message, user_id="BehavTestUser", user_name="TestUser"):
     """Helper: send a message and return the response."""
-    response = brain.process(user_id, message)
+    response = brain.process(user_id, message, user_name=user_name)
     logger.info(f"USER: {message}")
     logger.info(f"BOT: {response[:120]}...")
     return response

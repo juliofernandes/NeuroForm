@@ -123,6 +123,7 @@ class BridgeCore:
     def process_message(self, event: MessageEvent) -> Optional[ResponseEvent]:
         """
         Process an incoming message through the NeuroForm brain.
+        Scope is resolved from channel context and passed as ground rule.
 
         Returns a ResponseEvent or None if the message should be ignored.
         """
@@ -137,8 +138,13 @@ class BridgeCore:
 
         # Process through the brain
         try:
+            user_name = event.metadata.get("author_name", "Unknown")
+            scope = event.metadata.get("scope", "PUBLIC")
             if self._orchestrator:
-                reply = self._orchestrator.process(event.user_id, event.content)
+                reply = self._orchestrator.process(
+                    event.user_id, event.content,
+                    user_name=user_name, scope=scope,
+                )
             else:
                 reply = self._client.chat_with_memory(event.user_id, event.content)
 

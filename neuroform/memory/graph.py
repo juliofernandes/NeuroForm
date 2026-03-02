@@ -42,7 +42,10 @@ class KnowledgeGraph:
             
         queries = [
             "CREATE INDEX node_name_idx IF NOT EXISTS FOR (n:Entity) ON (n.name)",
-            "CREATE INDEX node_layer_idx IF NOT EXISTS FOR (n:Entity) ON (n.layer)"
+            "CREATE INDEX node_layer_idx IF NOT EXISTS FOR (n:Entity) ON (n.layer)",
+            # Per-user per-scope indexes — ground rule
+            "CREATE INDEX node_uid_idx IF NOT EXISTS FOR (n:Entity) ON (n.user_id)",
+            "CREATE INDEX node_scope_idx IF NOT EXISTS FOR (n:Entity) ON (n.scope)",
         ]
         
         # Create layer-specific indexes
@@ -84,19 +87,27 @@ class KnowledgeGraph:
         with self.driver.session() as session:
             session.run(query, layer=layer)
 
-    def add_node(self, label: str, name: str, layer: str = GraphLayer.NARRATIVE, properties: Dict[str, Any] = None):
+    def add_node(self, label: str, name: str, layer: str = GraphLayer.NARRATIVE,
+                 properties: Dict[str, Any] = None,
+                 user_id: str = "", scope: str = "PUBLIC"):
+        """
+        Add or merge a node. Every node carries user_id + scope as ground-rule
+        properties for per-user per-scope isolation.
+        """
         if not self.driver:
             return
         
         props = properties or {}
         props["name"] = name
         props["layer"] = layer
+        props["user_id"] = user_id
+        props["scope"] = scope
         
         # Construct SET clause from dictionary
         set_clauses = []
-        params = {"name": name, "layer": layer}
+        params = {"name": name, "layer": layer, "user_id": user_id, "scope": scope}
         for k, v in props.items():
-            if k not in ["name", "layer"]:
+            if k not in ["name", "layer", "user_id", "scope"]:
                 set_clauses.append(f"n.{k} = ${k}")
                 params[k] = v
                 
@@ -109,6 +120,7 @@ class KnowledgeGraph:
         query = f"""
         MATCH (root:LayerRoot {{name: $layer}})
         MERGE (n:{label} {{name: $name, layer: $layer}})
+        SET n.user_id = $user_id, n.scope = $scope
         {set_query}
         MERGE (n)-[:IN_LAYER]->(root)
         SET n.last_fired = timestamp()
@@ -118,7 +130,13 @@ class KnowledgeGraph:
         with self.driver.session() as session:
             session.run(query, **params)
 
-    def add_relationship(self, source_name: str, rel_type: str, target_name: str, strength: float = 1.0):
+    def add_relationship(self, source_name: str, rel_type: str, target_name: str,
+                         strength: float = 1.0,
+                         user_id: str = "", scope: str = "PUBLIC"):
+        """
+        Add or merge a relationship. Every edge carries user_id + scope as
+        ground-rule properties for per-user per-scope isolation.
+        """
         if not self.driver:
             return
             
@@ -130,28 +148,54 @@ class KnowledgeGraph:
         query = f"""
         MATCH (a {{name: $source}}), (b {{name: $target}})
         MERGE (a)-[r:{clean_rel_type}]->(b)
-        ON CREATE SET r.strength = $strength, r.created = timestamp(), r.last_fired = timestamp()
-        ON MATCH SET r.strength = r.strength + ($strength * 0.1), r.last_fired = timestamp()
+        ON CREATE SET r.strength = $strength, r.created = timestamp(),
+                      r.last_fired = timestamp(),
+                      r.user_id = $user_id, r.scope = $scope
+        ON MATCH SET r.strength = r.strength + ($strength * 0.1),
+                     r.last_fired = timestamp(),
+                     r.user_id = $user_id, r.scope = $scope
         RETURN r
         """
         with self.driver.session() as session:
-            session.run(query, source=source_name, target=target_name, strength=strength)
+            session.run(query, source=source_name, target=target_name,
+                        strength=strength, user_id=user_id, scope=scope)
 
-    def query_context(self, entity_name: str, layer: Optional[str] = None) -> List[Dict[str, Any]]:
+    def query_context(self, entity_name: str, layer: Optional[str] = None,
+                      user_id: str = "", scope: str = "PUBLIC") -> List[Dict[str, Any]]:
+        """
+        Query context with per-user per-scope isolation.
+
+        Visibility rules:
+        - PUBLIC scope: see PUBLIC nodes/edges only
+        - PRIVATE scope + user_id: see (user_id's PRIVATE) + all PUBLIC
+        - No user_id: PUBLIC only
+        """
         if not self.driver:
             return []
             
         layer_filter = "AND a.layer = $layer" if layer else ""
+
+        # Scope isolation: show PUBLIC always, show PRIVATE only for matching user
+        if user_id and scope in ("PRIVATE", "CORE_PRIVATE"):
+            scope_filter = (
+                "AND ((r.scope = 'PUBLIC' OR r.scope IS NULL) "
+                "OR (r.user_id = $user_id))"
+            )
+        else:
+            scope_filter = "AND (r.scope = 'PUBLIC' OR r.scope IS NULL)"
+
         query = f"""
         MATCH (a {{name: $name}})-[r]-(b)
-        WHERE 1=1 {layer_filter}
-        SET r.last_fired = timestamp() // Fire the neurons when accessed
-        RETURN a.name AS a_name, a.layer AS a_layer, type(r) AS rel, r.strength AS strength, b.name AS b_name, b.layer AS b_layer
+        WHERE 1=1 {layer_filter} {scope_filter}
+        SET r.last_fired = timestamp()
+        RETURN a.name AS a_name, a.layer AS a_layer, type(r) AS rel,
+               r.strength AS strength, b.name AS b_name, b.layer AS b_layer,
+               r.user_id AS r_user_id, r.scope AS r_scope
         ORDER BY r.strength DESC
         LIMIT 25
         """
         
-        params = {"name": entity_name}
+        params = {"name": entity_name, "user_id": user_id}
         if layer:
             params["layer"] = layer
             
@@ -165,6 +209,8 @@ class KnowledgeGraph:
                     "relationship": record["rel"],
                     "strength": record["strength"],
                     "target": record["b_name"],
-                    "target_layer": record["b_layer"]
+                    "target_layer": record["b_layer"],
+                    "user_id": record["r_user_id"] or "",
+                    "scope": record["r_scope"] or "PUBLIC",
                 })
         return results

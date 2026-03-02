@@ -149,3 +149,24 @@ def test_custom_working_memory_injected(mock_chat, mock_kg):
     client = OllamaClient(mock_kg, working_memory=custom_wm)
     assert client.working_memory is custom_wm
     assert client.working_memory.capacity == 3
+
+@patch("neuroform.llm.ollama_client.ollama.chat")
+def test_chat_with_tiered_context(mock_chat, mock_kg):
+    """Verify that tiered_context is used when provided (skip_context_fetch=True)."""
+    mock_chat.return_value = {"message": {"content": "I know Maria!"}}
+
+    client = OllamaClient(mock_kg)
+    reply = client.chat_with_memory(
+        "user123", "Who is Maria?",
+        skip_context_fetch=True,
+        tiered_context="[FOUNDATION KNOWLEDGE] Maria is the developer [/FOUNDATION KNOWLEDGE]",
+    )
+
+    assert reply == "I know Maria!"
+    # System prompt should contain our tiered context
+    args, kwargs = mock_chat.call_args
+    system_msg = kwargs["messages"][0]["content"]
+    assert "Maria is the developer" in system_msg
+    # query_context should NOT have been called (skip_context_fetch=True)
+    mock_kg.query_context.assert_not_called()
+

@@ -208,8 +208,9 @@ class BrainOrchestrator:
     def _execute_inference_with_tools(self, user_id: str, message: str, scope: str, tiered_ctx: str) -> str:
         """Handles multi-turn inference for native Python tool execution via Ollama."""
         import os
-        owner_id = os.environ.get("DISCORD_OWNER_ID")
-        is_owner = bool(owner_id and user_id == owner_id)
+        owner_env = os.environ.get("DISCORD_OWNER_ID", "")
+        owner_ids = [uid.strip() for uid in owner_env.split(",")] if owner_env else []
+        is_owner = bool(user_id in owner_ids)
         
         tool_instructions = tool_registry.get_prompt_instructions(is_owner)
         

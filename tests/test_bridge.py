@@ -156,7 +156,7 @@ class TestBridgeCore:
 
         assert result is not None
         assert result.content == "Orchestrator response"
-        mock_orch.process.assert_called_once_with("user1", "Hello")
+        mock_orch.process.assert_called_once_with("user1", "Hello", user_name="Unknown", scope="PUBLIC")
 
 
 # ===========================================================================

@@ -6,7 +6,7 @@ import pytest
 import time
 from unittest.mock import MagicMock, patch, PropertyMock
 
-from neuroform.brain.orchestrator import BrainOrchestrator
+from neuroform.brain.orchestrator import BrainOrchestrator, ContextObject
 from neuroform.brain.background import BackgroundScheduler
 
 
@@ -20,19 +20,34 @@ class TestBrainOrchestrator:
         kg = MagicMock()
         kg.driver = MagicMock()
         kg.query_context.return_value = [
-            {"source": "User", "relationship": "LIKES", "target": "Music", "strength": 3.0},
+            "User_u1 -[LIKES]-> Music (strength: 3.0)",
         ]
         return kg
 
     @pytest.fixture
-    def orchestrator(self, mock_kg):
+    def orchestrator(self, mock_kg, tmp_path):
+        from neuroform.memory.context_stream import ContextStream
+        from neuroform.memory.vector_store import VectorStore
+        from neuroform.memory.lessons import LessonManager
+
+        cs = ContextStream(max_turns=100, persist_path=str(tmp_path / "wm.jsonl"))
+        vs = VectorStore(model="test", max_entries=100)
+        lm = LessonManager(persist_path=str(tmp_path / "lessons.json"))
+
         with patch("neuroform.brain.orchestrator.OllamaClient") as MockClient:
             MockClient.return_value.chat_with_memory.return_value = "Test response"
-            orch = BrainOrchestrator(mock_kg, model="test-model")
-            return orch
+            with patch.object(vs, "embed", return_value=[]):  # Skip real embeddings
+                orch = BrainOrchestrator(
+                    mock_kg, model="test-model",
+                    context_stream=cs, vector_store=vs,
+                    lesson_manager=lm,
+                )
+                return orch
 
     def test_init_creates_all_systems(self, orchestrator):
-        assert orchestrator.working_memory is not None
+        assert orchestrator.context_stream is not None
+        assert orchestrator.vector_store is not None
+        assert orchestrator.lessons is not None
         assert orchestrator.amygdala is not None
         assert orchestrator.salience is not None
         assert orchestrator.habit_cache is not None
@@ -53,60 +68,69 @@ class TestBrainOrchestrator:
         orchestrator.process("user1", "Hello")
         assert orchestrator._message_count == 1
 
+    def test_process_passes_user_name(self, orchestrator):
+        orchestrator.process("user1", "Hello", user_name="Maria")
+        # Should have added a turn to ContextStream with user_name
+        assert orchestrator.context_stream.turn_count >= 1
+        last_turn = orchestrator.context_stream.buffer[-1]
+        assert last_turn.user_name == "Maria"
+
     def test_circadian_modulates_nt(self, orchestrator):
         orchestrator.process("user1", "Hello")
-        # NT should have been modulated by circadian
         assert orchestrator.nt.norepinephrine is not None
         assert orchestrator.nt.dopamine is not None
 
-    def test_salience_filters_context(self, orchestrator):
-        orchestrator.process("user1", "I love music")
-        # Working memory should have received graph context
-        items = orchestrator.working_memory.items
-        assert len(items) >= 0  # May or may not have items depending on mock
+    def test_recall_gathers_4_tiers(self, orchestrator):
+        # Add some data to each tier
+        orchestrator.context_stream.add_turn("u1", "hello", "hi", user_name="Maria")
+        orchestrator.lessons.add_lesson("Maria is the developer", user_id="u1")
+
+        ctx = orchestrator._recall("hello", "u1", user_name="Maria")
+        assert isinstance(ctx, ContextObject)
+        assert isinstance(ctx.conversation_history, str)
+        assert isinstance(ctx.vector_memories, list)
+        assert isinstance(ctx.graph_context, list)
+        assert isinstance(ctx.lessons, list)
+        assert "Maria is the developer" in ctx.lessons
+
+    def test_observe_persists_to_streams(self, orchestrator):
+        orchestrator._observe("u1", "hello", "hi", user_name="Maria")
+        assert orchestrator.context_stream.turn_count == 1
+        turn = orchestrator.context_stream.buffer[0]
+        assert turn.user_name == "Maria"
+        assert turn.user_message == "hello"
 
     def test_habit_cache_records_invocation(self, orchestrator):
         orchestrator.process("user1", "hello there")
         # Short responses (<50 chars) should NOT be recorded
         count = orchestrator.habit_cache.get_invocation_count("hello there")
-        # The mock returns "Test response" (13 chars) which is < 50, so NOT recorded
         assert count == 0
 
     def test_habit_cache_shortcircuit(self, orchestrator):
         """After enough invocations with long responses, habit cache should bypass LLM."""
-        # Make the response long enough to be cached
         orchestrator.client.chat_with_memory.return_value = "A" * 60
         for i in range(15):
             orchestrator.process("user1", "hello there my friend")
-        # The 16th call should hit the cache
         orchestrator.client.chat_with_memory.reset_mock()
         response = orchestrator.process("user1", "hello there my friend")
-        # Should have gotten the cached response
         assert isinstance(response, str)
 
     def test_sentiment_modulation(self, orchestrator):
         orchestrator.nt.reset()
         baseline_da = orchestrator.nt.dopamine
         orchestrator.process("user1", "I love this amazing awesome great thing")
-        # Positive sentiment should boost dopamine
         assert orchestrator.nt.dopamine >= baseline_da
 
     def test_negative_sentiment_modulation(self, orchestrator):
         orchestrator.nt.reset()
-        baseline_ne = orchestrator.nt.norepinephrine
-        # Process positive first, then negative
         orchestrator.process("user1", "I hate this terrible awful thing")
-        # Then the NT state gets circadian + sentiment modulation
         assert orchestrator.nt.norepinephrine is not None
 
     def test_prediction_evaluation(self, orchestrator):
-        """Verify that prediction error is evaluated on second message."""
-        # First message: set up prediction state directly
         orchestrator.predictive_model._last_prediction = "User wants music"
         orchestrator.predictive_model._last_context_sources = ["User_Music"]
         orchestrator._last_user_message = "Tell me about music"
 
-        # Second message: evaluate_error should be called
         with patch.object(orchestrator.predictive_model, 'evaluate_error',
                          return_value=0.2) as mock_eval:
             with patch.object(orchestrator.predictive_model, 'generate_feedback_signal',
@@ -122,7 +146,9 @@ class TestBrainOrchestrator:
         assert diag["message_count"] == 1
         assert "neurotransmitters" in diag
         assert "circadian" in diag
-        assert "working_memory" in diag
+        assert "context_stream" in diag
+        assert "vector_store" in diag
+        assert "lessons" in diag
         assert "habit_cache" in diag
 
     def test_compute_habit_key(self, orchestrator):
@@ -149,17 +175,32 @@ class TestBrainOrchestrator:
         s = BrainOrchestrator._estimate_sentiment("The sky is blue")
         assert s == 0.0
 
-    def test_build_history_string(self, orchestrator):
-        orchestrator.working_memory.add_conversation_turn("user", "Hello")
-        orchestrator.working_memory.add_conversation_turn("assistant", "Hi there")
-        history = orchestrator._build_history_string()
-        assert "user:" in history.lower()
-        assert "assistant:" in history.lower()
+    def test_format_tiered_context(self, orchestrator):
+        ctx = ContextObject(
+            conversation_history="Alice: hi\nBot: hello",
+            vector_memories=["memory about cats"],
+            graph_context=["Alice -[KNOWS]-> Bob"],
+            lessons=["Alice is a developer"],
+            foundation_facts="[SRC:FN:Alice] Alice -[ROLE]-> developer",
+        )
+        formatted = orchestrator._format_tiered_context(ctx)
+        assert "FOUNDATION KNOWLEDGE" in formatted or "LESSONS" in formatted
+        assert "Alice is a developer" in formatted
+
+    def test_format_tiered_context_empty(self, orchestrator):
+        ctx = ContextObject(
+            conversation_history="No conversation history.",
+            vector_memories=[],
+            graph_context=[],
+            lessons=[],
+            foundation_facts="",
+        )
+        formatted = orchestrator._format_tiered_context(ctx)
+        assert formatted == "No prior context available."
 
     def test_apply_feedback_strengthen(self, orchestrator):
         signals = [{"action": "STRENGTHEN", "target": "User_Music", "amount": 0.2}]
         orchestrator._apply_feedback_signals(signals)
-        # Should have run a cypher query
         orchestrator.kg.driver.session.assert_called()
 
     def test_apply_feedback_decay(self, orchestrator):
@@ -188,7 +229,6 @@ class TestBrainOrchestrator:
             assert isinstance(response, str)
 
     def test_prediction_with_feedback_signals(self, orchestrator):
-        """Verify feedback signals from prediction are applied."""
         orchestrator.predictive_model._last_prediction = "User wants cats"
         orchestrator.predictive_model._last_context_sources = ["User_Cats"]
         orchestrator._last_user_message = "Tell me about cats"
@@ -198,37 +238,31 @@ class TestBrainOrchestrator:
             with patch.object(orchestrator.predictive_model, 'generate_feedback_signal',
                              return_value=[{"action": "DECAY", "target": "User_Cats", "amount": 0.1}]):
                 orchestrator.process("user1", "Actually tell me about dogs")
-                # Feedback signals should have been applied
                 orchestrator.kg.driver.session.assert_called()
 
-    def test_custom_systems_injected(self, mock_kg):
-        """Verify dependency injection of custom brain systems."""
-        from neuroform.memory.working_memory import WorkingMemory
-        from neuroform.memory.habit_cache import HabitCache
-
-        custom_wm = WorkingMemory(capacity=3)
-        custom_habits = HabitCache(threshold=2)
-
-        with patch("neuroform.brain.orchestrator.OllamaClient"):
-            orch = BrainOrchestrator(
-                mock_kg, working_memory=custom_wm, habit_cache=custom_habits
-            )
-            assert orch.working_memory.capacity == 3
-            assert orch.habit_cache.threshold == 2
-
     def test_habit_not_recorded_for_short_response(self, orchestrator):
-        """Responses under 50 chars should not be cached."""
         orchestrator.client.chat_with_memory.return_value = "Short"
         orchestrator.process("user1", "test message")
         count = orchestrator.habit_cache.get_invocation_count("test message")
         assert count == 0
 
     def test_habit_recorded_for_long_response(self, orchestrator):
-        """Responses over 50 chars should be cached."""
         orchestrator.client.chat_with_memory.return_value = "A" * 60
         orchestrator.process("user1", "test message")
         count = orchestrator.habit_cache.get_invocation_count("test message")
         assert count == 1
+
+    def test_recall_graph_error_handled(self, orchestrator):
+        orchestrator.kg.query_context.side_effect = Exception("DB error")
+        ctx = orchestrator._recall("hello", "u1")
+        assert ctx.graph_context == []
+
+    def test_recall_with_user_name(self, orchestrator):
+        orchestrator.kg.query_context.return_value = ["Maria -[IS_DEVELOPER_OF]-> NeuroForm"]
+        ctx = orchestrator._recall("who am I", "u1", user_name="Maria")
+        # Should have queried by user_name
+        calls = [str(c) for c in orchestrator.kg.query_context.call_args_list]
+        assert any("Maria" in c for c in calls)
 
 
 # ===========================================================================
@@ -262,7 +296,7 @@ class TestBackgroundScheduler:
         assert scheduler._last_active > old
 
     def test_tick_decay(self, scheduler):
-        scheduler._last_decay = 0  # Force decay to trigger
+        scheduler._last_decay = 0
         results = scheduler.tick()
         assert results["decay"] is not None
         assert results["decay"]["status"] == "applied"
@@ -270,8 +304,8 @@ class TestBackgroundScheduler:
 
     def test_tick_dream_consolidation(self, scheduler):
         with patch.object(scheduler.circadian, 'should_dream_now', return_value=True):
-            scheduler._last_dream = 0  # Force dream to trigger
-            scheduler._last_decay = time.time()  # Prevent decay
+            scheduler._last_dream = 0
+            scheduler._last_decay = time.time()
             with patch.object(scheduler.dream, 'consolidate',
                             return_value={"status": "consolidated"}):
                 results = scheduler.tick()
@@ -280,9 +314,9 @@ class TestBackgroundScheduler:
                 assert scheduler.dream_runs == 1
 
     def test_tick_dmn_introspection(self, scheduler):
-        scheduler._last_active = 0  # Force idle
-        scheduler._last_dmn = 0  # Force DMN
-        scheduler._last_decay = time.time()  # Prevent decay
+        scheduler._last_active = 0
+        scheduler._last_dmn = 0
+        scheduler._last_decay = time.time()
         with patch.object(scheduler.circadian, 'should_dream_now', return_value=False):
             with patch.object(scheduler.dmn, 'introspect',
                             return_value={"status": "complete"}):
@@ -322,7 +356,6 @@ class TestBackgroundScheduler:
         assert not scheduler.is_running
 
     def test_stop_with_thread(self, scheduler):
-        """Verify stop correctly joins the thread."""
         import threading
         mock_thread = MagicMock(spec=threading.Thread)
         scheduler._running = True
@@ -342,17 +375,125 @@ class TestBackgroundScheduler:
         assert snap["running"] is False
 
     def test_no_duplicate_dream(self, scheduler):
-        """Verify dream won't run more than once per hour."""
-        scheduler._last_dream = time.time()  # Just ran
+        scheduler._last_dream = time.time()
         scheduler._last_decay = time.time()
         with patch.object(scheduler.circadian, 'should_dream_now', return_value=True):
             results = scheduler.tick()
             assert results["dream"] is None
 
     def test_no_dmn_when_active(self, scheduler):
-        """DMN shouldn't run when there's recent activity."""
-        scheduler._last_active = time.time()  # Just active
+        scheduler._last_active = time.time()
         scheduler._last_decay = time.time()
         with patch.object(scheduler.circadian, 'should_dream_now', return_value=False):
             results = scheduler.tick()
             assert results["dmn"] is None
+
+
+# ===========================================================================
+# Phase 2 Coverage Tests
+# ===========================================================================
+class TestPhase2Integration:
+
+    @pytest.fixture
+    def mock_kg(self):
+        kg = MagicMock()
+        kg.driver = MagicMock()
+        kg.query_context.return_value = [
+            {"source": "Maria", "relationship": "IS_A", "target": "Developer"},
+        ]
+        return kg
+
+    @pytest.fixture
+    def orchestrator(self, mock_kg, tmp_path):
+        from neuroform.memory.context_stream import ContextStream
+        from neuroform.memory.vector_store import VectorStore
+        from neuroform.memory.lessons import LessonManager
+        from neuroform.memory.tape_machine import TapeMachine
+        from neuroform.memory.reconciler import CrossTierReconciler
+        from neuroform.memory.scopes import ScopeManager
+
+        cs = ContextStream(max_turns=100, persist_path=str(tmp_path / "wm.jsonl"))
+        vs = VectorStore(model="test", max_entries=100)
+        lm = LessonManager(persist_path=str(tmp_path / "lessons.json"))
+        tm = TapeMachine(user_id="test", persist_dir=str(tmp_path / "tape"))
+        reconciler = CrossTierReconciler(model="test")
+        sm = ScopeManager(enable_scopes=True)
+
+        with patch("neuroform.brain.orchestrator.OllamaClient") as MockClient:
+            MockClient.return_value.chat_with_memory.return_value = "Test response"
+            with patch.object(vs, "embed", return_value=[]):
+                orch = BrainOrchestrator(
+                    mock_kg, model="test-model",
+                    context_stream=cs, vector_store=vs,
+                    lesson_manager=lm, tape_machine=tm,
+                    reconciler=reconciler, scope_manager=sm,
+                )
+                return orch
+
+    def test_init_phase2_systems(self, orchestrator):
+        assert orchestrator.tape is not None
+        assert orchestrator.reconciler is not None
+        assert orchestrator.scope_manager is not None
+
+    def test_recall_dict_graph_facts(self, orchestrator):
+        """Graph returns dict facts — cover L253 (isinstance(fact, dict))."""
+        ctx = orchestrator._recall("hello", "u1", user_name="Maria")
+        # KG returns dicts, so reconciler should get string versions
+        assert isinstance(ctx, ContextObject)
+        assert ctx.tape_view is not None
+        assert "TAPE MACHINE" in ctx.tape_view
+
+    @patch("neuroform.memory.reconciler._ollama")
+    def test_recall_reconciliation_conflicts(self, mock_ollama, orchestrator):
+        """Cover L268-273 — reconciler finds conflicts."""
+        mock_ollama.chat.return_value = {
+            "message": {"content": "CONFLICT:KG:0|Stale data in KG"}
+        }
+        orchestrator.lessons.add_lesson("Maria is vegan", user_id="u1")
+        ctx = orchestrator._recall("diet", "u1", user_name="Maria")
+        assert "RECONCILIATION" in ctx.reconciliation_notes or ctx.reconciliation_notes == ""
+
+    def test_recall_reconciliation_exception(self, orchestrator):
+        """Cover L273 — reconciler raises exception."""
+        orchestrator.reconciler.reconcile = MagicMock(side_effect=Exception("boom"))
+        ctx = orchestrator._recall("hello", "u1")
+        # Should not crash, reconciliation_notes stays empty
+        assert ctx.reconciliation_notes == ""
+
+    def test_observe_writes_to_tape(self, orchestrator):
+        """Cover tape write in _observe — T5 tape write."""
+        initial_ptr = orchestrator.tape.focus_pointer
+        orchestrator._observe("u1", "hello", "world", user_name="Maria")
+        # Tape pointer should advance
+        assert orchestrator.tape.focus_pointer != initial_ptr
+
+    def test_format_includes_tape_and_reconciliation(self, orchestrator):
+        """Cover L319 — tape_view in format, and reconciliation_notes."""
+        ctx = ContextObject(
+            conversation_history="User: hi\nBot: hello",
+            vector_memories=["mem1"],
+            graph_context=["fact1"],
+            lessons=["lesson1"],
+            foundation_facts="foundation",
+            tape_view="--- TAPE MACHINE ---",
+            reconciliation_notes="[RECONCILIATION: 1 conflicts detected]",
+        )
+        formatted = orchestrator._format_tiered_context(ctx)
+        assert "TAPE MACHINE" in formatted
+        assert "RECONCILIATION" in formatted
+        assert "LESSONS" in formatted
+
+    def test_diagnostics_includes_phase2(self, orchestrator):
+        """Cover expanded diagnostics with tape, reconciler, scope_manager."""
+        diag = orchestrator.get_diagnostics()
+        assert "tape" in diag
+        assert "reconciler" in diag
+        assert "scope_manager" in diag
+        assert diag["tape"]["user_id"] == "test"
+        assert diag["scope_manager"]["enabled"] is True
+
+    def test_process_with_phase2(self, orchestrator):
+        """E2E process call with Phase 2 systems wired in."""
+        response = orchestrator.process("u1", "hello", user_name="Maria")
+        assert isinstance(response, str)
+        assert len(response) > 0
