@@ -86,7 +86,33 @@ class DiscordAdapter(PlatformAdapter):
             import shutil
             from pathlib import Path
 
-            # T3: Neo4j Knowledge Graph
+            # ── Step 1: Clear in-memory state FIRST (before disk) ──
+            # This prevents the buffer from re-persisting on shutdown
+            if self._orchestrator:
+                orch = self._orchestrator
+                # Context Stream — wipe in-memory buffer + compaction summaries
+                if hasattr(orch, 'context_stream') and orch.context_stream:
+                    orch.context_stream.clear()
+                    cleared.append("ContextStream: in-memory buffer cleared")
+
+                # Tape Machine — reset in-memory state
+                if hasattr(orch, 'tape_machine') and orch.tape_machine:
+                    try:
+                        orch.tape_machine.buffer = []
+                        orch.tape_machine.head = [0, 0, 0]
+                        cleared.append("TapeMachine: in-memory state reset")
+                    except Exception as e:
+                        cleared.append(f"TapeMachine: error — {e}")
+
+                # Lessons — wipe in-memory
+                if hasattr(orch, 'lesson_manager') and orch.lesson_manager:
+                    try:
+                        orch.lesson_manager.lessons = []
+                        cleared.append("Lessons: in-memory cleared")
+                    except Exception as e:
+                        cleared.append(f"Lessons: error — {e}")
+
+            # ── Step 2: Clear Neo4j Knowledge Graph ──
             try:
                 if self._kg and self._kg.driver:
                     deleted = self._kg.clear_all()
@@ -94,7 +120,7 @@ class DiscordAdapter(PlatformAdapter):
             except Exception as e:
                 cleared.append(f"Neo4j: error — {e}")
 
-            # T1: ContextStream persistent files
+            # ── Step 3: Delete persistent files on disk ──
             memory_core = Path(os.getcwd()) / "memory" / "core"
             for fname in ["working_memory.jsonl", "archive_working_memory.jsonl", "lessons.json"]:
                 fpath = memory_core / fname
